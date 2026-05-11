@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Project artifacts (large / local)
+data/
+models/
+outputs/
+checkpoints/
+
+# IDE
+.idea/
+.vscode/
