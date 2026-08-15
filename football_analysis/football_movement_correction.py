@@ -10,7 +10,10 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.patches import FancyArrowPatch, Circle, FancyBboxPatch
+from matplotlib.patches import PathPatch
+from matplotlib.path import Path as MPath
 from matplotlib.animation import FuncAnimation
+from matplotlib.collections import PatchCollection
 import imageio_ffmpeg
 import subprocess
 import os
@@ -150,8 +153,24 @@ def make_good_shot_pose(t):
 
 # ─── Drawing helpers ──────────────────────────────────────────────────────────
 
-def draw_skeleton(ax, joints, color, alpha=1.0, lw=3, joint_size=80, head_r=0.04):
-    """Draw skeleton bones and joint circles."""
+def draw_skeleton(ax, joints, color, alpha=1.0, lw=3, joint_size=80, head_r=0.04,
+                  with_mesh=True, mesh_alpha=None):
+    """Draw body mesh then skeleton bones and joint circles."""
+    if with_mesh and alpha > 0.3:
+        # Pick mesh skin color based on skeleton color (bad=red-tinted, good=green-tinted)
+        if color in ('#ef5350',):
+            skin = '#c46060'
+            outline = '#8b2020'
+        elif color in ('#69f0ae',):
+            skin = '#4a9e75'
+            outline = '#1b6840'
+        else:
+            skin = '#7a7a9a'
+            outline = '#444466'
+        ma = (mesh_alpha if mesh_alpha is not None else alpha * 0.75)
+        draw_mesh(ax, joints, skin_color=skin, outline_color=outline,
+                  alpha=ma, zorder=2)
+
     for i, j in BONES:
         x = [joints[i][0], joints[j][0]]
         y = [joints[i][1], joints[j][1]]
@@ -241,6 +260,129 @@ def draw_good_annotations(ax, joints):
                       edgecolor='#00e676', alpha=0.88),
             zorder=10,
         )
+
+
+def _perp(v, width):
+    """Return a unit perpendicular vector scaled by width."""
+    n = np.array([-v[1], v[0]], dtype=float)
+    norm = np.linalg.norm(n)
+    if norm < 1e-9:
+        return np.array([width, 0.0])
+    return n / norm * width
+
+
+def _limb_quad(a, b, w_a, w_b):
+    """
+    Return the 4 corners of a tapered limb segment from joint a to joint b.
+    w_a / w_b are half-widths at each end.
+    """
+    d = b - a
+    pa = _perp(d, w_a)
+    pb = _perp(d, w_b)
+    return np.array([a + pa, a - pa, b - pb, b + pb])
+
+
+def draw_mesh(ax, joints, skin_color, outline_color, alpha=0.82, zorder=2):
+    """
+    Draw a body mesh over the skeleton using filled, tapered polygons for
+    each limb segment and the torso, plus edge lines to simulate mesh facets.
+    """
+    j = joints  # shorthand
+
+    # ── limb segment definitions: (joint_a, joint_b, half_w_a, half_w_b) ──
+    segments = [
+        # torso (wide trapezoid: shoulders → hips)
+        # shoulders centre = midpoint of j[2] and j[5]; hips = j[8],j[11]
+        (None, None, None, None, 'torso'),
+        # upper arms
+        (2, 3, 0.038, 0.028),   # r upper arm
+        (5, 6, 0.038, 0.028),   # l upper arm
+        # lower arms
+        (3, 4, 0.028, 0.018),   # r forearm
+        (6, 7, 0.028, 0.018),   # l forearm
+        # upper legs
+        (8, 9, 0.060, 0.048),   # r thigh
+        (11, 12, 0.060, 0.048), # l thigh
+        # lower legs
+        (9, 10, 0.048, 0.030),  # r shin
+        (12, 13, 0.048, 0.030), # l shin
+        # neck
+        (1, None, None, None, 'neck'),
+    ]
+
+    polys = []
+    # ── torso ──
+    r_sh, l_sh = j[2], j[5]
+    r_hp, l_hp = j[8], j[11]
+    sh_mid = (r_sh + l_sh) / 2
+    hp_mid = (r_hp + l_hp) / 2
+    neck = j[1]
+    torso_pts = np.array([
+        neck + _perp(r_sh - l_sh, 0.05),
+        neck - _perp(r_sh - l_sh, 0.05),
+        l_hp + _perp(l_sh - r_sh, 0.04),
+        r_hp + _perp(r_sh - l_sh, 0.04),
+    ])
+    polys.append(plt.Polygon(torso_pts, closed=True,
+                              facecolor=skin_color, edgecolor=outline_color,
+                              lw=0.6, alpha=alpha, zorder=zorder))
+
+    # ── limb quads ──
+    simple = [
+        (2, 3, 0.040, 0.028),
+        (5, 6, 0.040, 0.028),
+        (3, 4, 0.028, 0.016),
+        (6, 7, 0.028, 0.016),
+        (8, 9, 0.062, 0.048),
+        (11, 12, 0.062, 0.048),
+        (9, 10, 0.048, 0.028),
+        (12, 13, 0.048, 0.028),
+    ]
+    for a_idx, b_idx, wa, wb in simple:
+        quad = _limb_quad(j[a_idx], j[b_idx], wa, wb)
+        polys.append(plt.Polygon(quad, closed=True,
+                                  facecolor=skin_color, edgecolor=outline_color,
+                                  lw=0.6, alpha=alpha, zorder=zorder))
+
+    # ── neck ──
+    nk_quad = _limb_quad(j[1], j[0], 0.030, 0.022)
+    polys.append(plt.Polygon(nk_quad, closed=True,
+                              facecolor=skin_color, edgecolor=outline_color,
+                              lw=0.6, alpha=alpha, zorder=zorder))
+
+    for p in polys:
+        ax.add_patch(p)
+
+    # ── head ──
+    head_x, head_y = j[0]
+    head_r = 0.060
+    head_c = Circle((head_x, head_y + head_r * 0.3), head_r,
+                     facecolor=skin_color, edgecolor=outline_color,
+                     lw=0.8, alpha=alpha, zorder=zorder + 1)
+    ax.add_patch(head_c)
+
+    # ── mesh grid lines inside torso (subtle) ──
+    for frac in [0.33, 0.66]:
+        mid_top = (j[1] + j[2]) * frac + (j[1] + j[5]) * (1 - frac) * 0.5
+    # horizontal lines across torso bands
+    for frac in np.linspace(0.2, 0.8, 4):
+        p_top = neck * (1 - frac) + hp_mid * frac
+        ax.plot(
+            [p_top[0] - 0.09, p_top[0] + 0.09],
+            [p_top[1], p_top[1]],
+            color=outline_color, lw=0.4, alpha=alpha * 0.5, zorder=zorder + 1
+        )
+
+    # ── mesh lines on legs ──
+    for (a_idx, b_idx) in [(8, 9), (11, 12), (9, 10), (12, 13)]:
+        a, b = j[a_idx], j[b_idx]
+        for frac in [0.35, 0.65]:
+            mid = a * (1 - frac) + b * frac
+            ax.plot(
+                [mid[0] - 0.025, mid[0] + 0.025],
+                [mid[1], mid[1]],
+                color=outline_color, lw=0.4, alpha=alpha * 0.5, zorder=zorder + 1
+            )
 
 
 def draw_field_background(ax):
@@ -383,12 +525,12 @@ def render_frame(frame):
             ball_pos[0] += (t - 0.55) * 0.50
             ball_pos[1] += (t - 0.55) * 0.20
         draw_ball(ax, ball_pos)
-        # Motion trail on kicking foot
+        # Motion trail on kicking foot (no mesh on ghosts)
         if t > 0.2:
             for ti in np.linspace(0, t - 0.1, 5):
                 ghost = make_good_shot_pose(ti)
                 draw_skeleton(ax, ghost, color='#69f0ae', lw=1,
-                               alpha=0.12, joint_size=20)
+                               alpha=0.12, joint_size=20, with_mesh=False)
 
     elif phase == 'good_ann':
         joints = make_good_shot_pose(0.7)
