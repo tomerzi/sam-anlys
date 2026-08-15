@@ -1,0 +1,70 @@
+name: football-movement-coach
+version: "1.0"
+description: >
+  Analyses a football player's movement video, detects technique errors,
+  and produces a professional side-by-side coaching video with 3D skeleton
+  overlay, error annotations on the original footage, and a corrected
+  movement animation — all generated locally with no external API calls.
+category: sports-analysis
+stability: production
+
+input:
+  type: video
+  formats: [mp4, mov, avi, webm]
+  description: Single-player football action clip (shot, pass, dribble)
+
+output:
+  type: video
+  format: mp4
+  resolution: "1280x720"
+  fps: 24
+  layout:
+    left_panel:
+      label: "ORIGINAL"
+      content: original_frames_with_skeleton_and_errors
+      width: 580
+    right_panel:
+      label: "CORRECTED"
+      content: corrected_3d_animation
+      width: 580
+    bottom_bar:
+      label: instructions
+      content: scrolling_coaching_tips
+      height: 100
+    header:
+      content: title_and_score_meter
+
+stages:
+  - id: extract_poses
+    tool: analyze.pose_extractor
+    description: Run MediaPipe Pose on every frame → 15-joint skeleton sequence
+
+  - id: classify_action
+    tool: analyze.action_classifier
+    depends_on: [extract_poses]
+    description: Determine which football action is being performed
+
+  - id: detect_errors
+    tool: analyze.error_detector
+    depends_on: [extract_poses, classify_action]
+    description: Compare joints against ideal form; emit timestamped error list
+
+  - id: generate_correction
+    tool: render.correction_generator
+    depends_on: [detect_errors, classify_action]
+    description: Produce corrected joint sequence for right-panel animation
+
+  - id: render_left
+    tool: render.original_overlay
+    depends_on: [extract_poses, detect_errors]
+    description: Draw 3D skeleton + red error rings + labels on original frames
+
+  - id: render_right
+    tool: render.correction_animator
+    depends_on: [generate_correction]
+    description: Render corrected 3D mesh animation frames
+
+  - id: compose
+    tool: render.compositor
+    depends_on: [render_left, render_right, detect_errors]
+    description: Assemble side-by-side coaching video with header and bottom bar
