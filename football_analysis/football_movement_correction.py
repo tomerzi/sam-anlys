@@ -9,11 +9,12 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from matplotlib.patches import FancyArrowPatch, Circle, FancyBboxPatch
+from matplotlib.patches import FancyArrowPatch, Circle, FancyBboxPatch, Ellipse
 from matplotlib.patches import PathPatch
 from matplotlib.path import Path as MPath
 from matplotlib.animation import FuncAnimation
 from matplotlib.collections import PatchCollection
+import matplotlib.colors as mcolors
 import imageio_ffmpeg
 import subprocess
 import os
@@ -174,16 +175,19 @@ def draw_skeleton(ax, joints, color, alpha=1.0, lw=3, joint_size=80, head_r=0.04
     for i, j in BONES:
         x = [joints[i][0], joints[j][0]]
         y = [joints[i][1], joints[j][1]]
-        ax.plot(x, y, color=color, lw=lw, alpha=alpha, solid_capstyle='round',
-                zorder=3)
-    # Joints
+        ax.plot(x, y, color=color, lw=lw, alpha=alpha * 0.55,
+                solid_capstyle='round', zorder=5)
+    # Joint dots (skip head=0 — mesh draws it as a sphere)
     for idx, (jx, jy) in enumerate(joints):
-        size = joint_size * 1.8 if idx == 0 else joint_size
-        ax.scatter(jx, jy, s=size, c=color, zorder=4, alpha=alpha)
-    # Head circle
-    head_circle = Circle((joints[0][0], joints[0][1] + head_r),
-                          head_r, color=color, fill=True, zorder=4, alpha=alpha)
-    ax.add_patch(head_circle)
+        if idx == 0 and with_mesh:
+            continue
+        size = joint_size
+        ax.scatter(jx, jy, s=size, c=color, zorder=6, alpha=alpha * 0.7)
+    # Head dot when no mesh
+    if not with_mesh:
+        head_circle = Circle((joints[0][0], joints[0][1] + head_r),
+                              head_r, color=color, fill=True, zorder=4, alpha=alpha)
+        ax.add_patch(head_circle)
 
 
 def draw_ball(ax, pos, color='#f4a011', alpha=1.0):
@@ -262,8 +266,15 @@ def draw_good_annotations(ax, joints):
         )
 
 
+# ─── 3-D shading helpers ──────────────────────────────────────────────────────
+
+# Light source: upper-left, slightly toward viewer
+_LIGHT_2D = np.array([-0.55, 0.72], dtype=float)
+_LIGHT_2D /= np.linalg.norm(_LIGHT_2D)
+
+
 def _perp(v, width):
-    """Return a unit perpendicular vector scaled by width."""
+    """Unit perpendicular to v, scaled by width."""
     n = np.array([-v[1], v[0]], dtype=float)
     norm = np.linalg.norm(n)
     if norm < 1e-9:
@@ -271,118 +282,147 @@ def _perp(v, width):
     return n / norm * width
 
 
-def _limb_quad(a, b, w_a, w_b):
+def _cyl_intensity(u):
     """
-    Return the 4 corners of a tapered limb segment from joint a to joint b.
-    w_a / w_b are half-widths at each end.
+    Lambertian + Phong specular shading for a cylinder at lateral param u ∈ [-1,1].
+    Assumes light from upper-left; viewer looking along -Z.
     """
-    d = b - a
-    pa = _perp(d, w_a)
-    pb = _perp(d, w_b)
-    return np.array([a + pa, a - pa, b - pb, b + pb])
+    nz = np.sqrt(max(0.0, 1.0 - u * u))          # surface faces viewer amount
+    # 2-D surface normal projected: (u, nz)
+    diffuse = max(0.0, _LIGHT_2D[0] * u + _LIGHT_2D[1] * nz)
+    ambient = 0.22
+    # Specular: reflect L over N, check against view direction (0,0,1)
+    #   R = 2(N·L)N - L  →  R_z = 2(N·L)*N_z
+    nl = _LIGHT_2D[0] * u + _LIGHT_2D[1] * nz
+    spec = max(0.0, 2.0 * nl * nz) ** 28 * 0.50
+    return min(1.0, ambient + 0.65 * diffuse + spec)
 
 
-def draw_mesh(ax, joints, skin_color, outline_color, alpha=0.82, zorder=2):
+def _draw_cylinder(ax, p1, p2, r1, r2, rgba, n=22, alpha=1.0, zorder=2):
+    """3-D tapered cylinder from p1 (radius r1) to p2 (radius r2)."""
+    p1, p2 = np.array(p1, float), np.array(p2, float)
+    d = p2 - p1
+    br, bg, bb, _ = rgba
+
+    for i in range(n):
+        ul = -1.0 + 2.0 * i / n
+        ur = -1.0 + 2.0 * (i + 1) / n
+        um = (ul + ur) * 0.5
+
+        s = _cyl_intensity(um)
+        fc = (np.clip(br * s, 0, 1),
+              np.clip(bg * s, 0, 1),
+              np.clip(bb * s, 0, 1))
+
+        quad = np.array([
+            p1 + _perp(d, r1 * ul),
+            p1 + _perp(d, r1 * ur),
+            p2 + _perp(d, r2 * ur),
+            p2 + _perp(d, r2 * ul),
+        ])
+        ax.add_patch(plt.Polygon(quad, closed=True, facecolor=fc,
+                                  edgecolor='none', alpha=alpha, zorder=zorder))
+
+    # Silhouette edge lines
+    dark = (br * 0.25, bg * 0.25, bb * 0.25)
+    for side in (-1, 1):
+        e1 = p1 + _perp(d, r1 * side)
+        e2 = p2 + _perp(d, r2 * side)
+        ax.plot([e1[0], e2[0]], [e1[1], e2[1]],
+                color=dark, lw=0.7, alpha=alpha * 0.9,
+                zorder=zorder + 0.1, solid_capstyle='round')
+
+
+def _draw_sphere(ax, center, radius, rgba, n=24, alpha=1.0, zorder=4):
+    """3-D sphere as a shaded disc with specular highlight."""
+    cx, cy = float(center[0]), float(center[1])
+    br, bg, bb, _ = rgba
+
+    for i in range(n):
+        ul = -1.0 + 2.0 * i / n
+        ur = -1.0 + 2.0 * (i + 1) / n
+        um = (ul + ur) * 0.5
+
+        h = np.sqrt(max(0.0, 1.0 - um * um)) * radius
+        s = _cyl_intensity(um)
+        fc = (np.clip(br * s, 0, 1),
+              np.clip(bg * s, 0, 1),
+              np.clip(bb * s, 0, 1))
+
+        strip = plt.Polygon([
+            [cx + radius * ul, cy - h],
+            [cx + radius * ur, cy - h],
+            [cx + radius * ur, cy + h],
+            [cx + radius * ul, cy + h],
+        ], closed=True, facecolor=fc, edgecolor='none', alpha=alpha, zorder=zorder)
+        ax.add_patch(strip)
+
+    # Specular glint
+    gx, gy = cx - radius * 0.30, cy + radius * 0.32
+    gr = radius * 0.24
+    glint_c = (min(1.0, br + 0.55), min(1.0, bg + 0.55), min(1.0, bb + 0.55))
+    ax.add_patch(Circle((gx, gy), gr, facecolor=glint_c, edgecolor='none',
+                         alpha=alpha * 0.50, zorder=zorder + 1))
+    # Outline
+    ax.add_patch(Circle((cx, cy), radius, facecolor='none',
+                         edgecolor=(br * 0.25, bg * 0.25, bb * 0.25),
+                         lw=0.8, alpha=alpha, zorder=zorder + 1))
+
+
+def draw_mesh(ax, joints, skin_color, outline_color=None, alpha=0.90, zorder=2):
     """
-    Draw a body mesh over the skeleton using filled, tapered polygons for
-    each limb segment and the torso, plus edge lines to simulate mesh facets.
+    Full 3-D body mesh: Lambertian+Specular cylinders for limbs,
+    shaded spheres for joints and head, depth-ordered back→front.
     """
-    j = joints  # shorthand
+    j = joints
+    rgba = np.array(mcolors.to_rgba(skin_color))
 
-    # ── limb segment definitions: (joint_a, joint_b, half_w_a, half_w_b) ──
-    segments = [
-        # torso (wide trapezoid: shoulders → hips)
-        # shoulders centre = midpoint of j[2] and j[5]; hips = j[8],j[11]
-        (None, None, None, None, 'torso'),
-        # upper arms
-        (2, 3, 0.038, 0.028),   # r upper arm
-        (5, 6, 0.038, 0.028),   # l upper arm
-        # lower arms
-        (3, 4, 0.028, 0.018),   # r forearm
-        (6, 7, 0.028, 0.018),   # l forearm
-        # upper legs
-        (8, 9, 0.060, 0.048),   # r thigh
-        (11, 12, 0.060, 0.048), # l thigh
-        # lower legs
-        (9, 10, 0.048, 0.030),  # r shin
-        (12, 13, 0.048, 0.030), # l shin
-        # neck
-        (1, None, None, None, 'neck'),
-    ]
+    # Slightly darker variant for back-facing limbs
+    rgba_back = rgba * np.array([0.72, 0.72, 0.72, 1.0])
 
-    polys = []
-    # ── torso ──
-    r_sh, l_sh = j[2], j[5]
-    r_hp, l_hp = j[8], j[11]
-    sh_mid = (r_sh + l_sh) / 2
-    hp_mid = (r_hp + l_hp) / 2
-    neck = j[1]
-    torso_pts = np.array([
-        neck + _perp(r_sh - l_sh, 0.05),
-        neck - _perp(r_sh - l_sh, 0.05),
-        l_hp + _perp(l_sh - r_sh, 0.04),
-        r_hp + _perp(r_sh - l_sh, 0.04),
-    ])
-    polys.append(plt.Polygon(torso_pts, closed=True,
-                              facecolor=skin_color, edgecolor=outline_color,
-                              lw=0.6, alpha=alpha, zorder=zorder))
+    # ── ground shadow ─────────────────────────────────────────────────────────
+    scx = (j[10][0] + j[13][0]) / 2
+    ax.add_patch(Ellipse((scx, 0.035), 0.22, 0.030,
+                          facecolor='black', edgecolor='none',
+                          alpha=0.28, zorder=1))
 
-    # ── limb quads ──
-    simple = [
-        (2, 3, 0.040, 0.028),
-        (5, 6, 0.040, 0.028),
-        (3, 4, 0.028, 0.016),
-        (6, 7, 0.028, 0.016),
-        (8, 9, 0.062, 0.048),
-        (11, 12, 0.062, 0.048),
-        (9, 10, 0.048, 0.028),
-        (12, 13, 0.048, 0.028),
-    ]
-    for a_idx, b_idx, wa, wb in simple:
-        quad = _limb_quad(j[a_idx], j[b_idx], wa, wb)
-        polys.append(plt.Polygon(quad, closed=True,
-                                  facecolor=skin_color, edgecolor=outline_color,
-                                  lw=0.6, alpha=alpha, zorder=zorder))
+    # ── back limbs (left side of player, further from viewer) ─────────────────
+    _draw_cylinder(ax, j[5],  j[6],  0.032, 0.024, rgba_back, alpha=alpha * 0.88, zorder=zorder)
+    _draw_cylinder(ax, j[6],  j[7],  0.024, 0.014, rgba_back, alpha=alpha * 0.88, zorder=zorder)
+    _draw_sphere(ax, j[5],  0.028, rgba_back, alpha=alpha * 0.85, zorder=zorder)
+    _draw_sphere(ax, j[6],  0.020, rgba_back, alpha=alpha * 0.85, zorder=zorder)
+    _draw_cylinder(ax, j[11], j[12], 0.054, 0.042, rgba_back, alpha=alpha * 0.88, zorder=zorder)
+    _draw_cylinder(ax, j[12], j[13], 0.042, 0.024, rgba_back, alpha=alpha * 0.88, zorder=zorder)
+    _draw_sphere(ax, j[11], 0.036, rgba_back, alpha=alpha * 0.85, zorder=zorder)
+    _draw_sphere(ax, j[12], 0.028, rgba_back, alpha=alpha * 0.85, zorder=zorder)
 
-    # ── neck ──
-    nk_quad = _limb_quad(j[1], j[0], 0.030, 0.022)
-    polys.append(plt.Polygon(nk_quad, closed=True,
-                              facecolor=skin_color, edgecolor=outline_color,
-                              lw=0.6, alpha=alpha, zorder=zorder))
+    # ── torso ─────────────────────────────────────────────────────────────────
+    sh_mid = (j[2] + j[5]) / 2
+    hp_mid = (j[8] + j[11]) / 2
+    w_sh = np.linalg.norm(j[2] - j[5]) / 2 + 0.042
+    w_hp = np.linalg.norm(j[8] - j[11]) / 2 + 0.036
+    _draw_cylinder(ax, sh_mid, hp_mid, w_sh, w_hp, rgba,
+                   n=28, alpha=alpha, zorder=zorder + 1)
 
-    for p in polys:
-        ax.add_patch(p)
+    # ── neck ──────────────────────────────────────────────────────────────────
+    _draw_cylinder(ax, j[1], j[0], 0.022, 0.018, rgba,
+                   alpha=alpha, zorder=zorder + 1)
 
-    # ── head ──
-    head_x, head_y = j[0]
-    head_r = 0.060
-    head_c = Circle((head_x, head_y + head_r * 0.3), head_r,
-                     facecolor=skin_color, edgecolor=outline_color,
-                     lw=0.8, alpha=alpha, zorder=zorder + 1)
-    ax.add_patch(head_c)
+    # ── front limbs (right side of player) ────────────────────────────────────
+    _draw_sphere(ax, j[2],  0.028, rgba, alpha=alpha, zorder=zorder + 2)
+    _draw_cylinder(ax, j[2],  j[3],  0.035, 0.026, rgba, alpha=alpha, zorder=zorder + 2)
+    _draw_sphere(ax, j[3],  0.022, rgba, alpha=alpha, zorder=zorder + 2)
+    _draw_cylinder(ax, j[3],  j[4],  0.026, 0.015, rgba, alpha=alpha, zorder=zorder + 2)
 
-    # ── mesh grid lines inside torso (subtle) ──
-    for frac in [0.33, 0.66]:
-        mid_top = (j[1] + j[2]) * frac + (j[1] + j[5]) * (1 - frac) * 0.5
-    # horizontal lines across torso bands
-    for frac in np.linspace(0.2, 0.8, 4):
-        p_top = neck * (1 - frac) + hp_mid * frac
-        ax.plot(
-            [p_top[0] - 0.09, p_top[0] + 0.09],
-            [p_top[1], p_top[1]],
-            color=outline_color, lw=0.4, alpha=alpha * 0.5, zorder=zorder + 1
-        )
+    _draw_sphere(ax, j[8],  0.038, rgba, alpha=alpha, zorder=zorder + 2)
+    _draw_cylinder(ax, j[8],  j[9],  0.058, 0.044, rgba, alpha=alpha, zorder=zorder + 2)
+    _draw_sphere(ax, j[9],  0.034, rgba, alpha=alpha, zorder=zorder + 2)
+    _draw_cylinder(ax, j[9],  j[10], 0.044, 0.026, rgba, alpha=alpha, zorder=zorder + 2)
 
-    # ── mesh lines on legs ──
-    for (a_idx, b_idx) in [(8, 9), (11, 12), (9, 10), (12, 13)]:
-        a, b = j[a_idx], j[b_idx]
-        for frac in [0.35, 0.65]:
-            mid = a * (1 - frac) + b * frac
-            ax.plot(
-                [mid[0] - 0.025, mid[0] + 0.025],
-                [mid[1], mid[1]],
-                color=outline_color, lw=0.4, alpha=alpha * 0.5, zorder=zorder + 1
-            )
+    # ── head sphere (skin tone) ───────────────────────────────────────────────
+    skin_rgba = np.array([0.88, 0.72, 0.56, 1.0])
+    _draw_sphere(ax, (j[0][0], j[0][1] + 0.056), 0.060, skin_rgba,
+                 n=28, alpha=alpha, zorder=zorder + 3)
 
 
 def draw_field_background(ax):
