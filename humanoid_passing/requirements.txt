@@ -1,0 +1,20 @@
+# Core simulation
+mujoco>=3.2.0            # MjSpec attach (scene composition) needs >=3.2
+numpy>=1.24.0
+
+# RL environments
+gymnasium>=0.29.0
+pettingzoo>=1.24.0
+supersuit>=3.9.0         # parameter sharing: parallel env -> SB3 vec env
+
+# Training
+stable-baselines3>=2.3.0
+torch>=2.1.0
+tensorboard>=2.15.0
+
+# Rendering
+imageio[ffmpeg]>=2.31.0
+
+# The Robotis OP3 model itself is NOT vendored here (~45 MB of meshes).
+# Download it with:  python main.py fetch
+# Source: https://github.com/google-deepmind/mujoco_menagerie (Apache-2.0)

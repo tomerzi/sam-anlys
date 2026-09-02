@@ -189,3 +189,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# humanoid_passing - generated scene, fetched meshes, training runs
+humanoid_passing/assets/generated/
+humanoid_passing/assets/op3/assets/
+humanoid_passing/runs/
