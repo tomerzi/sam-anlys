@@ -46,6 +46,10 @@ ruff-format over existing files; it would reformat unrelated lines.
   deadlocks against MuJoCo (workers block on a pipe, CPUs idle). Single-threaded is both
   correct and faster here. `train.SeedShim` patches a second SuperSuit/SB3 gap.
 
+**Starting a fresh session on this package?** Read
+`humanoid_passing/docs/SESSION_STATE.md` first — it records what has been measured, which
+bugs are already fixed, and what the next step is.
+
 ## Verify changes with
 
 ```bash
