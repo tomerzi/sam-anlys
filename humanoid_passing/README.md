@@ -12,8 +12,11 @@ reward, and by episode termination — not merely documented.
 
 ## Quickstart
 
+### Linux / macOS
+
 ```bash
 cd humanoid_passing
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 python main.py fetch     # download the OP3 model (~45 MB, not vendored)
@@ -25,6 +28,40 @@ python main.py eval   --stage 0
 python main.py viewer --stage 0                      # interactive window (local machine)
 python main.py render --stage 0 --out runs/stage0.mp4  # mp4 (works headless)
 ```
+
+### Windows (PowerShell)
+
+Work from a normal user folder — `C:\Windows\System32` is write-protected and
+`git clone` fails there with "Permission denied".
+
+```powershell
+cd $HOME\Documents
+git clone -b claude/humanoid-ball-passing-rl-n1fejo https://github.com/tomerzi/sam-anlys.git
+cd sam-anlys\humanoid_passing
+
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+
+python main.py fetch
+python main.py build
+python main.py check
+python main.py viewer --stage 0 --untrained
+```
+
+There is no `source` on Windows and paths use `\`. Prefer `py` over `python` (the
+launcher is more reliable) and always `python -m pip`, never a bare `pip`, so you
+get the virtualenv's pip.
+
+Two common Windows snags:
+
+- **`Activate.ps1 cannot be loaded ...`** — PowerShell's execution policy. Run
+  `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` first.
+- **`Failed to launch python.exe (0x80070003)`** — PATH points at a Python that no
+  longer exists, usually a leftover Microsoft Store alias. Reinstall from
+  python.org with *Add python.exe to PATH* ticked, and turn off the `python.exe`
+  / `python3.exe` aliases under Settings → Apps → Advanced app settings →
+  App execution aliases.
 
 `viewer` opens a real MuJoCo window and needs a display, so it only works on your
 own machine - not over SSH without X forwarding, not in a container, not in a
