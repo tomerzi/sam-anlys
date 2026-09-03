@@ -10,6 +10,7 @@ Usage
     python main.py train --stage 1 --resume   # warm-start from the previous stage
     python main.py eval  --stage 0
     python main.py render --stage 0 --out runs/stage0.mp4
+    python main.py viewer --stage 0            # interactive window, local machine only
 
 Everything is run from inside humanoid_passing/. The curriculum stages are
 0 stand | 1 stand under push | 2 kick to target | 3 pass + receive | 4 rally.
@@ -39,6 +40,10 @@ def main() -> int:
     p = sub.add_parser("eval", help="Evaluate a stage against its success criterion")
     p.add_argument("--stage", type=int, default=0, choices=[0, 1, 2, 3, 4])
     p.add_argument("--episodes", type=int, default=20)
+
+    p = sub.add_parser("viewer", help="Interactive viewer (needs a display; local only)")
+    p.add_argument("--stage", type=int, default=0, choices=[0, 1, 2, 3, 4])
+    p.add_argument("--untrained", action="store_true")
 
     p = sub.add_parser("render", help="Render a policy to mp4")
     p.add_argument("--stage", type=int, default=0, choices=[0, 1, 2, 3, 4])
@@ -85,6 +90,10 @@ def main() -> int:
         from evaluate import evaluate
         evaluate(config, episodes=args.episodes)
         return 0
+
+    if args.cmd == "viewer":
+        from viewer import launch
+        return launch(config, untrained=args.untrained)
 
     if args.cmd == "render":
         from render import render

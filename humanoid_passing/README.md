@@ -22,8 +22,14 @@ python main.py check     # smoke test — always run this before training
 
 python main.py train  --stage 0
 python main.py eval   --stage 0
-python main.py render --stage 0 --out runs/stage0.mp4
+python main.py viewer --stage 0                      # interactive window (local machine)
+python main.py render --stage 0 --out runs/stage0.mp4  # mp4 (works headless)
 ```
+
+`viewer` opens a real MuJoCo window and needs a display, so it only works on your
+own machine - not over SSH without X forwarding, not in a container, not in a
+notebook. It says so and exits cleanly rather than crashing. Use `render`
+anywhere headless.
 
 Then walk up the curriculum, warm-starting each stage from the last:
 
@@ -159,6 +165,14 @@ it. `train.SeedShim` supplies it.
 
 **`AttributeError: 'PassingParallelEnv' object has no attribute 'render_mode'`.**
 SuperSuit's `MarkovVectorEnv` reads `render_mode` off the raw env. The env sets it.
+
+**Rendering segfaults inside `PPO.load`.** Importing torch and initialising an
+OSMesa/EGL context in one interpreter crashes in torch's CUDA bindings, so
+`render.py` splits the work across two processes: roll the policy out with torch
+(no GL), then replay the recorded trajectory through the renderer (no torch).
+A side benefit is that a saved trajectory can be re-rendered at any resolution or
+camera angle without re-running the policy. Software rendering of the OP3's
+high-poly visual meshes is slow, so `--stride` subsamples frames.
 
 **Rendering dies with an OpenGL error.**
 Rendering needs an offscreen GL backend; training and evaluation do not.

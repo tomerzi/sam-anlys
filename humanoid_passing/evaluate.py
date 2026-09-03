@@ -9,9 +9,9 @@ from pathlib import Path
 
 import numpy as np
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from config import Config
+from obs_norm import load_obs_normalizer
 from envs.single_env import SingleAgentEnv
 from envs.parallel_env import PassingParallelEnv
 from sim import rewards as R
@@ -43,14 +43,8 @@ def _load(config: Config, stage: int):
 def evaluate(config: Config, episodes: int = 20) -> dict[str, float]:
     model, stats = _load(config, config.stage)
 
-    make = (lambda: SingleAgentEnv(config)) if config.stage <= 2 \
-        else (lambda: PassingParallelEnv(config))
-    raw = DummyVecEnv([lambda: SingleAgentEnv(config)])
-    norm = VecNormalize.load(str(stats), raw)
-    norm.training = False
-    norm.norm_reward = False
-
-    env = make()
+    normalize = load_obs_normalizer(stats)
+    env = SingleAgentEnv(config) if config.stage <= 2 else PassingParallelEnv(config)
     survived = delivered = passed = 0
     all_passes: list[int] = []
 
@@ -63,13 +57,13 @@ def evaluate(config: Config, episodes: int = 20) -> dict[str, float]:
         steps = 0
         while not done:
             if config.stage <= 2:
-                action, _ = model.predict(norm.normalize_obs(obs), deterministic=True)
+                action, _ = model.predict(normalize(obs), deterministic=True)
                 obs, _, term, trunc, info = env.step(action)
                 done = term or trunc
             else:
                 acts = {}
                 for a, o in obs_d.items():
-                    action, _ = model.predict(norm.normalize_obs(o), deterministic=True)
+                    action, _ = model.predict(normalize(o), deterministic=True)
                     acts[a] = action
                 obs_d, _, term, trunc, info_d = env.step(acts)
                 done = all(term.values()) or all(trunc.values())
