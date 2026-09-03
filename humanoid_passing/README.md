@@ -34,6 +34,27 @@ python main.py render --stage 0 --out runs/stage0.mp4  # mp4 (works headless)
 Work from a normal user folder — `C:\Windows\System32` is write-protected and
 `git clone` fails there with "Permission denied".
 
+**Recommended: let `uv` pin the Python version.** This sidesteps a broken or
+missing system Python entirely — uv downloads its own interpreter for this
+project and never touches your PATH:
+
+```powershell
+cd $HOME\Documents
+git clone -b claude/humanoid-ball-passing-rl-n1fejo https://github.com/tomerzi/sam-anlys.git
+cd sam-anlys\humanoid_passing
+
+uv venv --python 3.12 .venv
+.\.venv\Scripts\Activate.ps1
+uv pip install -r requirements.txt
+```
+
+Pin **3.12**, not the newest release. `supersuit` is the least actively
+maintained dependency here and is usually the first to lack wheels for a fresh
+Python; without a wheel, pip falls back to building from source, which on
+Windows is its own adventure.
+
+Without uv, using the system Python:
+
 ```powershell
 cd $HOME\Documents
 git clone -b claude/humanoid-ball-passing-rl-n1fejo https://github.com/tomerzi/sam-anlys.git
